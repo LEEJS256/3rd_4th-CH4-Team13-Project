@@ -10,6 +10,10 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "GameAbilitySystem/Attibute/TFDAttributeSet.h"
+#include "Kismet/GameplayStatics.h"
+#include "TFDPlayerDataAsset.h"
+#include "PlayerState/TFDPlayerState.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -18,9 +22,68 @@ DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
 ATFDCharacter::ATFDCharacter()
 {
+	PrimaryActorTick.bCanEverTick = false;
+
+	// ASC 생성
+	AbilitySystemComponent = CreateDefaultSubobject<UAbilitySystemComponent>(TEXT("AbilitySystemComp"));
+
+	// AttributeSet 생성
+	AttributeSet = CreateDefaultSubobject<UTFDAttributeSet>(TEXT("AttributeSet"));
+	BaseSetting();
+}
+
+UAbilitySystemComponent* ATFDCharacter::GetAbilitySystemComponent() const
+{
+	return AbilitySystemComponent;
+}
+
+
+void ATFDCharacter::NotifyControllerChanged()
+{
+	Super::NotifyControllerChanged();
+}
+
+void ATFDCharacter::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+
+	// 서버일 때만 실행
+	if (HasAuthority())
+	{
+		// PlayerState에 접근하여 ASC 초기화
+		if (ATFDPlayerState* pPlayerState = Cast<ATFDPlayerState>(GetPlayerState()))
+		{
+			if (AbilitySystemComponent)
+			{
+				// ASC의 Owner는 PlayerState, Avatar는 이 캐릭터(Pawn)
+				AbilitySystemComponent->InitAbilityActorInfo(pPlayerState, this);
+			}
+		}
+       
+		SetDAPlayerStat();
+	
+		
+		for (const auto& AbilityClass : StartupAbilities)
+		{
+			if (AbilityClass)
+			{
+				AbilitySystemComponent->GiveAbility(FGameplayAbilitySpec(AbilityClass, 1, 0, this));
+			}
+		}
+	}
+}
+
+
+void ATFDCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+}
+
+void ATFDCharacter::BaseSetting()
+{
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
-		
+
 	// Don't rotate when the controller rotates. Let that just affect the camera.
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;
@@ -47,83 +110,28 @@ ATFDCharacter::ATFDCharacter()
 
 	// Create a follow camera
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
-	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName); // Attach the camera to the end of the boom and let the boom adjust to match the controller orientation
+	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+	// Attach the camera to the end of the boom and let the boom adjust to match the controller orientation
 	FollowCamera->bUsePawnControlRotation = false; // Camera does not rotate relative to arm
 
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
 }
 
-//////////////////////////////////////////////////////////////////////////
-// Input
-
-void ATFDCharacter::NotifyControllerChanged()
+void ATFDCharacter::SetDAPlayerStat()
 {
-	Super::NotifyControllerChanged();
-
-	// Add Input Mapping Context
-	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
+	if (CharacterData && AttributeSet)
 	{
-		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
+		// AttributeSet의 초기값을 데이터 에셋의 값으로 설정
+		AttributeSet->SetHealth(CharacterData->Health);
+		AttributeSet->SetMaxHealth(CharacterData->MaxHealth);
+		AttributeSet->SetMana(CharacterData->Mana);
+		AttributeSet->SetMaxMana(CharacterData->MaxMana);
+		AttributeSet->SetSpeed(CharacterData->Speed);
+
+		if (GetCharacterMovement() && AttributeSet)
 		{
-			Subsystem->AddMappingContext(DefaultMappingContext, 0);
+			GetCharacterMovement()->MaxWalkSpeed = AttributeSet->GetSpeed();
 		}
-	}
-}
-
-void ATFDCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
-{
-	// Set up action bindings
-	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
-		
-		// Jumping
-		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
-		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
-
-		// Moving
-		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ATFDCharacter::Move);
-
-		// Looking
-		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ATFDCharacter::Look);
-	}
-	else
-	{
-		UE_LOG(LogTemplateCharacter, Error, TEXT("'%s' Failed to find an Enhanced Input component! This template is built to use the Enhanced Input system. If you intend to use the legacy system, then you will need to update this C++ file."), *GetNameSafe(this));
-	}
-}
-
-void ATFDCharacter::Move(const FInputActionValue& Value)
-{
-	// input is a Vector2D
-	FVector2D MovementVector = Value.Get<FVector2D>();
-
-	if (Controller != nullptr)
-	{
-		// find out which way is forward
-		const FRotator Rotation = Controller->GetControlRotation();
-		const FRotator YawRotation(0, Rotation.Yaw, 0);
-
-		// get forward vector
-		const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
-	
-		// get right vector 
-		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
-
-		// add movement 
-		AddMovementInput(ForwardDirection, MovementVector.Y);
-		AddMovementInput(RightDirection, MovementVector.X);
-	}
-}
-
-void ATFDCharacter::Look(const FInputActionValue& Value)
-{
-	// input is a Vector2D
-	FVector2D LookAxisVector = Value.Get<FVector2D>();
-
-	if (Controller != nullptr)
-	{
-		// add yaw and pitch input to controller
-		AddControllerYawInput(LookAxisVector.X);
-		AddControllerPitchInput(LookAxisVector.Y);
 	}
 }

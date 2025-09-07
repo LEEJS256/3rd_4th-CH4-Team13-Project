@@ -3,14 +3,14 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/GameMode.h"
-#include "TFDGameMode.generated.h"
+#include "GameFramework/PlayerState.h"
+#include "TFDPlayerState.generated.h"
 
 /**
  * 
  */
 UCLASS()
-class TFD_API ATFDGameMode : public AGameMode
+class TFD_API ATFDPlayerState : public APlayerState
 {
 	GENERATED_BODY()
 	
